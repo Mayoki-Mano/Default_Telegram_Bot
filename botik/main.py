@@ -1,4 +1,4 @@
-from bot_functions import *
+from Bot import *
 
 db_path = 'db/database.db'
 dir_path = 'db'

@@ -1,11 +1,26 @@
-import traceback
+from enum import Enum
 
 import telebot
 
-from botik.Database import Database
+from botik.db.Database import Database
+
+
+class State(Enum):
+    UNREGISTERED = 0
+    REGISTERED = 1
+    IN_TEAM = 2
+    REG_NAME = 3
+    REG_AGE = 4
+    REG_PASSWD = 5
+    LOG_NAME = 6
+    LOG_PASSWD = 7
+    INV_NAME = 8
+    CHECK_INV = 9
+    CHECK_INV_NAME = 10
 
 
 class Bot(telebot.TeleBot):
+
     def __init__(self, token, dir_path, db_path):
         super().__init__(token)
         self.DB = Database(dir_path, db_path)
@@ -14,53 +29,73 @@ class Bot(telebot.TeleBot):
         self.register_message_handler(self.get_help, commands=['help'])
         self.register_message_handler(self.get_logout, commands=['logout'])
         self.register_message_handler(self.get_profile, commands=['profile'])
+        self.register_message_handler(self.get_top_players, commands=['top_players'])
+        self.register_message_handler(self.get_top_teams, commands=['top_teams'])
         self.register_message_handler(self.get_text, content_types=['text'])
 
+    def get_top_teams(self, message):
+        team_info = self.DB.get_top_teams_from_database()
+        for i in range(len(team_info)):
+            self.send_message(message.chat.id,
+                              str(i + 1) + ".     TeamName:  " + team_info[i][0] + "  Score:  " + str(
+                                  team_info[i][1]) + "  MembersCount:  " + str(
+                                  team_info[i][2]))
+
+    def get_top_players(self, message):
+        profile_info = self.DB.get_top_players_from_database()
+        for i in range(len(profile_info)):
+            self.send_message(message.chat.id,
+                              str(i + 1) + ".     Nickname:  " + profile_info[i][0] + "  Age:  " + str(
+                                  profile_info[i][1]) + "  Score:  " + str(
+                                  profile_info[i][2]) + "  Team:  " + str(
+                                  profile_info[i][3]))
+
     def get_profile(self, message):
-        state = self.load_state_from_database(message.chat.id)
-        if state == 0:
+        state = self.load_state_from_database(message)
+        if state == State.UNREGISTERED:
             self.send_message(message.chat.id, 'Вы не зарегистрированы, вам доступны команды start/reg/login/help')
         else:
-            self.DB.cursor.execute("""
-            SELECT TeamMember.MemberName, Team.TeamName
-                FROM TeamMember 
-                JOIN Team ON TeamMember.TeamID = Team.TeamID
-                WHERE TeamMember.MemberID = ?""", (message.chat.id,))
-            self.send_message(message.chat.id, self.DB.cursor.fetchone())
+            profile_info = self.DB.get_profile_from_database(message.chat.id)
+            self.send_message(message.chat.id,
+                              "Nickname: " + profile_info[0] + "\nAge: " + str(profile_info[1]) + "\nScore: " +
+                              str(profile_info[2]) + "\nTeam: " + str(profile_info[3]))
 
-    def load_state_from_database(self, chat_id):
-        self.DB.cursor.execute('SELECT state FROM States WHERE chat_id = ?', (chat_id,))
-        result = self.DB.cursor.fetchone()
-        return 0 if result is None else result[0]
+    def load_state_from_database(self, message):
+        result = self.DB.get_state_from_database(message)
+        return State(0) if result is None else State(result[0])
 
-    def save_state_to_database(self, chat_id, state):
-        self.DB.cursor.execute('INSERT INTO States (chat_id, state, MemberID) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE chat_id=chat_id, state=state', (chat_id, state,-1))
-        self.DB.conn.commit()
+    def insert_into_states_table(self, chat_id, state, member_name):
+        self.DB.set_state_to_database(chat_id, state.value)
+        if member_name is not None:
+            self.DB.set_member_name_into_states_table(chat_id, member_name)
 
     def start_message(self, message):
-        state = self.load_state_from_database(message.chat.id)
+        state = self.load_state_from_database(message)
         match state:
-            case 0:
+            case State.UNREGISTERED:
                 self.send_message(message.chat.id, 'Вы не зарегистрированы, вам доступны команды start/reg/login/help')
-            case 1:
+            case State.REGISTERED:
                 self.send_message(message.chat.id,
                                   'Вы зарегистрированы, вам доступны команды start/logout/help/profile')
-            case 3 | 4:
+            case State.REG_NAME | State.REG_AGE:
                 self.send_message(message.chat.id, 'Введите ваш возраст')
-            case 5 | 7:
+            case State.REG_PASSWD | State.LOG_PASSWD:
                 self.send_message(message.chat.id, 'Введите ваш пароль')
-            case 6:
+            case State.LOG_NAME:
                 self.send_message(message.chat.id, 'Введите ваше имя')
             case _:
                 self.send_message(message.chat.id, 'Start_message error, case didn\'t find')
 
     def get_logout(self, message):
-        state = self.load_state_from_database(message.chat.id)
-        if state == 0:
+        state = self.load_state_from_database(message)
+        if state == State.UNREGISTERED:
             self.send_message(message.chat.id, 'Вы и так не авторизованы')
         else:
+            self.DB.delete_chat_id_from_database(message.chat.id)
             self.send_message(message.chat.id, 'Успешная деавторизация')
-            self.save_state_to_database(message.chat.id, 0)
+            self.insert_into_states_table(message.chat.id, State.UNREGISTERED, None)  # useless
+            if self.dict.__contains__(message.chat.id):
+                self.dict.pop(message.chat.id)
 
     def get_help(self, message):
         self.send_message(message.chat.id,
@@ -68,22 +103,22 @@ class Bot(telebot.TeleBot):
 
     def get_text(self, message):
         text = message.text
-        state = self.load_state_from_database(message.chat.id)
+        state = self.load_state_from_database(message)
         if text == "Привет":
             self.send_message(message.from_user.id, "Привет))")
             return
         match state:
-            case 0:
+            case State.UNREGISTERED:
                 match text:
                     case "/reg":
-                        self.save_state_to_database(message.chat.id, 3)
+                        self.insert_into_states_table(message.chat.id, State.REG_NAME, None)
                         self.send_message(message.from_user.id, "Введите своё имя")
                     case "/login":
-                        self.save_state_to_database(message.chat.id, 6)
+                        self.insert_into_states_table(message.chat.id, State.LOG_NAME, None)
                         self.send_message(message.from_user.id, "Введите своё имя")
                     case _:
                         self.send_message(message.from_user.id, "Пошёл нахуй")
-            case 1:
+            case State.REGISTERED:
                 match text:
                     case "/reg":
                         self.send_message(message.from_user.id, "Вы уже авторизованы, рега не будет")
@@ -91,61 +126,60 @@ class Bot(telebot.TeleBot):
                         self.send_message(message.from_user.id, "Вы уже авторизованы")
                     case _:
                         self.send_message(message.from_user.id, "Пошёл нахуй")
-            case 3:
+            case State.REG_NAME:
                 self.dict[message.chat.id] = (message.text,)
-                self.DB.cursor.execute('SELECT * FROM TeamMember WHERE MemberName =?', (message.text,))
-                if not self.DB.cursor.fetchone():
-                    self.save_state_to_database(message.chat.id, 4)
-                    self.DB.cursor.execute("""INSERT OR REPLACE INTO TeamMember
-                                           (MemberID,MemberName,MemberAge,MemberPassword,TeamID) 
-                                           VALUES(?,?,?,?,?)""", (message.chat.id, message.text, None, -1))
-                    self.DB.conn.commit()
+                if not self.DB.user_exits_in_db(message.text):
+                    self.insert_into_states_table(message.chat.id, State.REG_AGE, message.text)
+                    self.DB.set_member_to_db(message.text, -1, 0, None, -1)
                     self.send_message(message.from_user.id, "Введите свой возраст")
                 else:
-                    self.save_state_to_database(message.chat.id, 0)
+                    self.insert_into_states_table(message.chat.id, State.UNREGISTERED, None)
                     self.send_message(message.from_user.id, "Пользователь с таким именем уже существует")
-            case 4:
-                text = message.text
+            case State.REG_AGE:
                 try:
                     text = int(message.text)
                     if text <= 0:
                         self.send_message(message.from_user.id, "Некорректный возраст, попробуйте снова")
-                except IOError:
-                    print("get_text, case 4 IOError", traceback)
+                        return
+                except ValueError:
+                    self.send_message(message.from_user.id, "Желательно цифрами")
+                    return
+                if not self.dict.__contains__(message.chat.id):
+                    self.dict[message.chat.id] = (self.DB.get_membername_by_id(message.chat.id),)
                 self.dict[message.chat.id] = (self.dict[message.chat.id][0], text)
-                self.DB.cursor.execute("""INSERT OR REPLACE INTO TeamMember (MemberID,MemberName,MemberAge,
-                MemberPassword,TeamID) VALUES (?,?,?,?,?)""",
-                                       (message.chat.id, self.dict[message.chat.id][0],
-                                        self.dict[message.chat.id][1]), None, -1)
-                self.DB.conn.commit()
-                self.save_state_to_database(message.chat.id, 5)
+                self.DB.update_member_age_to_db(self.dict[message.chat.id][0], text)
+                self.insert_into_states_table(message.chat.id, State.REG_PASSWD, None)
                 self.send_message(message.from_user.id, "Введите ваш пароль")
-            case 5:
+            case State.REG_PASSWD:
+                if not self.dict.__contains__(message.chat.id):
+                    self.dict[message.chat.id] = (self.DB.get_membername_by_id(message.chat.id),)
+                    self.dict[message.chat.id] = (self.DB.get_membername_by_id(message.chat.id),
+                                                  self.DB.get_age_by_id(self.dict[message.chat.id][0]),)
                 self.dict[message.chat.id] = (
                     self.dict[message.chat.id][0], self.dict[message.chat.id][1], message.text,)
-                self.save_state_to_database(message.chat.id, 1)
-                self.DB.cursor.execute("""INSERT OR REPLACE INTO TeamMember (MemberID,MemberName,MemberAge,
-                MemberPassword,TeamID) VALUES (?,?,?,?,?) """,
-                                       (message.chat.id, self.dict[message.chat.id][0], self.dict[message.chat.id][1],
-                                        self.dict[message.chat.id][2], -1))
-                self.DB.conn.commit()
+                self.insert_into_states_table(message.chat.id, State.REGISTERED, self.dict[message.chat.id][0])
+                self.DB.update_member_password_to_db(self.dict[message.chat.id][0], message.text)
                 self.send_message(message.from_user.id, "Успешная регистрация")
-            case 6:
+            case State.LOG_NAME:
                 self.dict[message.chat.id] = (message.text,)
-                self.DB.cursor.execute('SELECT * FROM TeamMember WHERE MemberID =?', (message.chat.id,))
-                if self.DB.cursor.fetchone():
-                    self.save_state_to_database(message.chat.id, 7)
+                if self.DB.user_exits_in_db(message.text):
+                    self.insert_into_states_table(message.chat.id, State.LOG_PASSWD, message.text)
                     self.send_message(message.from_user.id, "Введите ваш пароль")
                 else:
                     self.send_message(message.from_user.id, "Пользователя с данным именем не существует")
-            case 7:
+                    self.insert_into_states_table(message.chat.id, State.UNREGISTERED, None)
+            case State.LOG_PASSWD:
+                if not self.dict.__contains__(message.chat.id):
+                    self.dict[message.chat.id] = (self.DB.get_membername_by_id(
+                        message.chat.id),)
                 self.dict[message.chat.id] = (self.dict[message.chat.id][0], message.text,)
-                self.save_state_to_database(message.chat.id, 1)
-                self.DB.cursor.execute('SELECT * FROM TeamMember WHERE MemberID =? AND MemberPassword=?',
-                                       (message.chat.id, self.dict[1]))
-                if self.DB.cursor.fetchone():
+
+                if self.DB.try_login_to_db(self.dict[message.chat.id][0], message.text):
+                    self.insert_into_states_table(message.chat.id, State.REGISTERED, self.dict[message.chat.id][0])
                     self.send_message(message.from_user.id, "Успешная авторизация")
                 else:
+                    self.insert_into_states_table(message.chat.id, State.UNREGISTERED, None)
                     self.send_message(message.from_user.id, "Неправильный пароль")
             case _:
+                self.insert_into_states_table(message.chat.id, State.UNREGISTERED, None)
                 self.send_message(message.from_user.id, "get_text case error")
