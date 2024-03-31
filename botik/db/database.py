@@ -13,9 +13,6 @@ class Database:
         self.cursor = self.conn.cursor()
         self.db_tables_creation()
 
-    def __del__(self):
-        self.conn.close()
-
     def db_tables_creation(self):
         sql_query_Team_creating = """
         CREATE TABLE IF NOT EXISTS Team (
@@ -105,9 +102,9 @@ class Database:
         member_name = self.get_membername_by_id(chat_id)
         team_name = self.get_member_team_from_db(member_name)
         self.cursor.execute("""UPDATE TeamMember 
-        SET TeamMember.Score=TeamMember.Score+? 
-        WHERE TeamMember.MemberName = ?""", (score, member_name))
-        self.cursor.execute("""UPDATE Team SET Team.TeamScore=Team.TeamScore+? WHERE TeamName=?""",
+        SET Score=Score+? 
+        WHERE MemberName = ?""", (score, member_name))
+        self.cursor.execute("""UPDATE Team SET TeamScore=TeamScore+? WHERE TeamName=?""",
                             (score, team_name))
         self.conn.commit()
 
@@ -122,7 +119,7 @@ class Database:
 
     def get_top_players_from_database(self):
         self.cursor.execute(
-            """SELECT * FROM TeamMember ORDER BY score LIMIT 10""")
+            """SELECT * FROM TeamMember ORDER BY score DESC LIMIT 10""")
         data_array_of_players = self.cursor.fetchall()
         players = []
         for data_player in data_array_of_players:
@@ -136,7 +133,7 @@ class Database:
         return Player(*self.cursor.fetchone())
 
     def get_top_teams_from_database(self):
-        self.cursor.execute("""SELECT * FROM Team ORDER BY TeamScore LIMIT 10""")
+        self.cursor.execute("""SELECT * FROM Team ORDER BY  TeamScore DESC LIMIT 10""")
         data_array_of_teams = self.cursor.fetchall()
         teams = []
         for data_team in data_array_of_teams:
@@ -176,7 +173,7 @@ class Database:
         for data in self.cursor.fetchall():
             team_names.append(data[0])
         placeholders = ', '.join('?' for _ in team_names)
-        self.cursor.execute(f"""SELECT * FROM Team WHERE TeamName IN ({placeholders})""",tuple(team_names))
+        self.cursor.execute(f"""SELECT * FROM Team WHERE TeamName IN ({placeholders})""", tuple(team_names))
         teams = []
         for data_team in self.cursor.fetchall():
             teams.append(Team(*data_team))
@@ -190,5 +187,5 @@ class Database:
         self.conn.commit()
 
     def get_team_by_member_name(self, member_name):
-        self.cursor.execute("""SELECT TeamName FROM TeamMember WHERE MemberName =?""",(member_name,))
+        self.cursor.execute("""SELECT TeamName FROM TeamMember WHERE MemberName =?""", (member_name,))
         return self.cursor.fetchone()[0]
