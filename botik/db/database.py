@@ -22,14 +22,14 @@ class Database:
             TeamName VARCHAR(255) NOT NULL,
             TeamScore INTEGER DEFAULT 0,
             CreationTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            MembersCount INT
+            MembersCount INT DEFAULT 0
         );
         """
         sql_query_TeamMember_creating = """
         CREATE TABLE IF NOT EXISTS TeamMember (
             MemberName VARCHAR(255),
             MemberPassword VARCHAR(255),
-            MemberAge INT,
+            MemberAge INT DEFAULT -1,
             Score INTEGER DEFAULT 0,
             TeamName VARCHAR(255),
             FOREIGN KEY (TeamName) REFERENCES Team(TeamName),
@@ -40,7 +40,7 @@ class Database:
         CREATE TABLE IF NOT EXISTS States (
         chat_id INTEGER PRIMARY KEY,
         MemberName VARCHAR(255),
-        state INT
+        state INT DEFAULT 0
         );
         """
         sql_query_TeamInvites_creating = """
@@ -175,7 +175,8 @@ class Database:
         team_names = []
         for data in self.cursor.fetchall():
             team_names.append(data[0])
-        self.cursor.execute("""SELECT * FROM Team WHERE TeamName IN (:team_names)""")
+        placeholders = ', '.join('?' for _ in team_names)
+        self.cursor.execute(f"""SELECT * FROM Team WHERE TeamName IN ({placeholders})""",tuple(team_names))
         teams = []
         for data_team in self.cursor.fetchall():
             teams.append(Team(*data_team))
@@ -187,3 +188,7 @@ class Database:
         self.cursor.execute("""INSERT INTO TeamInvites (MemberName, TeamName) VALUES (?,?)""",
                             (player_name, team_name))
         self.conn.commit()
+
+    def get_team_by_member_name(self, member_name):
+        self.cursor.execute("""SELECT TeamName FROM TeamMember WHERE MemberName =?""",(member_name,))
+        return self.cursor.fetchone()[0]

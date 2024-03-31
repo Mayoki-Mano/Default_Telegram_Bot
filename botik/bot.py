@@ -25,7 +25,7 @@ class State(Enum):
 class Bot(telebot.TeleBot):
 
     def __init__(self, token, dir_path, db_path):
-        super().__init__(token)
+        super().__init__(token, threaded=False)
         self.DB = Database(dir_path, db_path)
         self.dict = {}
         self.register_message_handler(self.start_message, commands=['start'])
@@ -35,6 +35,7 @@ class Bot(telebot.TeleBot):
         self.register_message_handler(self.get_top_players, commands=['top_players'])
         self.register_message_handler(self.get_top_teams, commands=['top_teams'])
         self.register_message_handler(self.get_text, content_types=['text'])
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.DB:
             self.DB.__del__()
@@ -45,6 +46,7 @@ class Bot(telebot.TeleBot):
             self.worker_pool.workers.clear()
             self.worker_pool.clear_exceptions()
             self.worker_pool.close()
+
     def __enter__(self):
         return self
 
@@ -185,7 +187,10 @@ class Bot(telebot.TeleBot):
                         message.chat.id),)
                 self.dict[message.chat.id] = (self.dict[message.chat.id][0], message.text,)
                 if self.DB.try_login_to_db(self.dict[message.chat.id][0], message.text):
-                    self.insert_into_states_table(message.chat.id, State.REGISTERED, self.dict[message.chat.id][0])
+                    if self.DB.get_team_by_member_name(self.dict[message.chat.id][0]):
+                        self.insert_into_states_table(message.chat.id, State.HAVE_TEAM, self.dict[message.chat.id][0])
+                    else:
+                        self.insert_into_states_table(message.chat.id, State.REGISTERED, self.dict[message.chat.id][0])
                     self.send_message(message.from_user.id, "Успешная авторизация")
                 else:
                     self.insert_into_states_table(message.chat.id, State.UNREGISTERED, None)
@@ -201,16 +206,16 @@ class Bot(telebot.TeleBot):
                 match text:
                     case "/invite_to_team":
                         self.send_message(message.chat.id, "Введите имя приглашаемого друга")
-                        self.DB.set_state_to_database(message.chat.id, State.INV_NAME)
+                        self.insert_into_states_table(message.chat.id, State.INV_NAME, None)
                     case "/leave_from_team":
-                        self.DB.set_state_to_database(message.chat.id, State.REGISTERED)
+                        self.insert_into_states_table(message.chat.id, State.REGISTERED, None)
                         self.send_message(message.chat.id, "Вы успешно вышли из команды")
                     case "/check_invites_to_team":
                         inv_teams = self.DB.get_team_invites(message.chat.id)
                         if inv_teams:
                             for inv_team in inv_teams:
                                 self.send_message(message.chat.id, inv_team.print_info())
-                            self.DB.set_state_to_database(message.chat.id, State.CHECK_INV_NAME)
+                            self.insert_into_states_table(message.chat.id, State.CHECK_INV_NAME, None)
                             self.send_message(message.chat.id, "Введите имя предпочитаемой команды")
                         else:
                             self.send_message(message.chat.id, "Вас ещё никто не пригласил :(")
@@ -224,21 +229,27 @@ class Bot(telebot.TeleBot):
                         self.send_message(message.chat.id, "Пошёл нахуй, и команду свою прихвати")
             case State.CHECK_INV_NAME:
                 team_name = message.text
-                if team_name in self.DB.get_team_invites(message.chat):
-                    self.DB.set_state_to_database(message.chat.id, State.HAVE_TEAM)
+                inv_teams = self.DB.get_team_invites(message.chat.id)
+                inv_team_names = [inv_team.name for inv_team in inv_teams]
+                if team_name in inv_team_names:
+                    self.insert_into_states_table(message.chat.id, State.HAVE_TEAM, None)
+                    self.DB.delete_player_from_team(message.chat.id)
                     self.DB.add_player_into_team(message.chat.id, team_name)
                     self.send_message(message.chat.id, f"Вы успешно добавлены в команду {team_name}")
                 else:
                     self.send_message(message.chat.id, "В предложенном списке нет такой команды :(")
-                    self.DB.set_state_to_database(message.chat.id, State.REGISTERED)
+                    if self.DB.get_team_by_member_name(self.DB.get_membername_by_id(message.chat.id)):
+                        self.insert_into_states_table(message.chat.id, State.HAVE_TEAM, None)
+                    else:
+                        self.insert_into_states_table(message.chat.id, State.REGISTERED, None)
 
             case State.INV_NAME:
                 name = message.text
                 if self.DB.user_exits_in_db(name):
                     self.DB.invite_player_into_team(message.chat.id, name)
-                    self.send_message(message.from_user.id, "Введите свой возраст")
+                    self.send_message(message.from_user.id, "Игрок успешно приглашён")
                 else:
-                    self.insert_into_states_table(message.chat.id, State.UNREGISTERED, None)
+                    self.insert_into_states_table(message.chat.id, State.HAVE_TEAM, None)
                     self.send_message(message.from_user.id, "Пользователя с таким именем не существует")
             case _:
                 self.insert_into_states_table(message.chat.id, State.UNREGISTERED, None)
